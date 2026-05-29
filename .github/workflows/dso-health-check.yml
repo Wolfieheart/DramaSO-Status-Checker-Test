@@ -46,7 +46,7 @@ jobs:
             COLOR="3066993"
           else
             STATUS="down"
-            MESSAGE="🚨 DramaSO is DOWN — responded with HTTP $HTTP_STATUS."
+            MESSAGE="🚨 DramaSO is DOWN (HTTP $HTTP_STATUS). Hang tight! In the meantime, ping Morgue in Tech Support on the DramaSO Discord and they'll look into it."
             COLOR="15158332"
           fi
           PREVIOUS_STATUS=$(cat .status)

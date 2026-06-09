@@ -35,35 +35,92 @@ jobs:
         id: check
         run: |
           echo "RUN TRIGGERED: $(date -u)"
-          URL="https://dramaso.org"
+
+          MAIN_URL="https://dramaso.org"
+          API_URL="https://api.dramaso.org"
           STATUS="down"
           MESSAGE=""
           COLOR="15158332"
 
-          # Capture both status code and body
-          RESPONSE=$(curl -s -o /tmp/response_body.txt -w "%{http_code}" --max-time 10 "$URL" || echo "000")
-          HTTP_STATUS="$RESPONSE"
-          BODY=$(cat /tmp/response_body.txt)
+          # Cache-bust timestamp so Cloudflare can't serve a stale cached page
+          CACHE_BUST=$(date +%s)
 
-          # Cloudflare serves its own HTML error pages (521/522/523/524) but
-          # can also return 200 via Always Online — detect both cases
-          CF_ERROR=false
-          if echo "$BODY" | grep -qiE "(error 521|error 522|error 523|error 524|cloudflare.*origin|web server is down|connection timed out|origin is unreachable)"; then
-            CF_ERROR=true
+          # ── Main site check ──────────────────────────────────────────────
+          # Dump response headers to file so we can inspect CF-Cache-Status
+          MAIN_HTTP=$(curl -s \
+            -o /tmp/main_body.txt \
+            -D /tmp/main_headers.txt \
+            -w "%{http_code}" \
+            --max-time 10 \
+            -H "Cache-Control: no-cache, no-store, must-revalidate" \
+            -H "Pragma: no-cache" \
+            "${MAIN_URL}/?nocache=${CACHE_BUST}" \
+            || echo "000")
+
+          MAIN_BODY=$(cat /tmp/main_body.txt)
+          MAIN_CF_CACHE=$(grep -i "^cf-cache-status:" /tmp/main_headers.txt \
+            | awk '{print tolower($2)}' | tr -d '\r\n')
+
+          echo "Main HTTP: $MAIN_HTTP"
+          echo "Main CF-Cache-Status: $MAIN_CF_CACHE"
+
+          # CF serving cached content = origin was not reached = treat as suspect
+          MAIN_CF_CACHED=false
+          if echo "$MAIN_CF_CACHE" | grep -qiE "^(hit|stale|expired|revalidated)$"; then
+            MAIN_CF_CACHED=true
+            echo "WARNING: Cloudflare served a cached response for main site"
           fi
 
-          if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 400 ] && [ "$CF_ERROR" = "false" ]; then
+          # Cloudflare error body patterns (521/522/523/524 etc.)
+          MAIN_CF_ERROR=false
+          if echo "$MAIN_BODY" | grep -qiE \
+            "(error 52[1-4]|cloudflare.*origin|web server is down|connection timed out|origin is unreachable|this page has been cached by cloudflare)"; then
+            MAIN_CF_ERROR=true
+          fi
+
+          MAIN_OK=false
+          if [ "$MAIN_HTTP" -ge 200 ] && [ "$MAIN_HTTP" -lt 400 ] \
+            && [ "$MAIN_CF_ERROR" = "false" ] \
+            && [ "$MAIN_CF_CACHED" = "false" ]; then
+            MAIN_OK=true
+          fi
+
+          # ── API check (not cached, more reliable) ────────────────────────
+          API_HTTP=$(curl -s \
+            -o /tmp/api_body.txt \
+            -D /tmp/api_headers.txt \
+            -w "%{http_code}" \
+            --max-time 10 \
+            -H "Cache-Control: no-cache, no-store, must-revalidate" \
+            -H "Pragma: no-cache" \
+            "${API_URL}/?nocache=${CACHE_BUST}" \
+            || echo "000")
+
+          echo "API HTTP: $API_HTTP"
+
+          API_OK=false
+          if [ "$API_HTTP" -ge 200 ] && [ "$API_HTTP" -lt 500 ]; then
+            # Even a 404 from the API means the origin is alive
+            API_OK=true
+          fi
+
+          # ── Combine: both must look healthy ──────────────────────────────
+          if [ "$MAIN_OK" = "true" ] && [ "$API_OK" = "true" ]; then
             STATUS="up"
-            MESSAGE="✅ DramaSO is UP — responded with HTTP $HTTP_STATUS."
+            MESSAGE="✅ DramaSO is UP — site HTTP $MAIN_HTTP, API HTTP $API_HTTP."
             COLOR="3066993"
           else
-            if [ "$CF_ERROR" = "true" ]; then
-              STATUS="down"
-              MESSAGE="🚨 DramaSO is DOWN (Cloudflare error page detected, HTTP $HTTP_STATUS). Hang tight! In the meantime, ping Morgue in Tech Support on the DramaSO Discord and they'll look into it."
+            STATUS="down"
+            if [ "$MAIN_CF_CACHED" = "true" ]; then
+              REASON="Cloudflare is serving a cached page (origin unreachable)"
+            elif [ "$MAIN_CF_ERROR" = "true" ]; then
+              REASON="Cloudflare error page detected (HTTP $MAIN_HTTP)"
+            elif [ "$MAIN_HTTP" = "000" ]; then
+              REASON="No response from server (connection failed)"
             else
-              STATUS="down"
-              MESSAGE="🚨 DramaSO is DOWN (HTTP $HTTP_STATUS). Hang tight! In the meantime, ping Morgue in Tech Support on the DramaSO Discord and they'll look into it."
+              REASON="HTTP $MAIN_HTTP (site), HTTP $API_HTTP (API)"
             fi
+            MESSAGE="🚨 DramaSO is DOWN ($REASON). Hang tight! In the meantime, ping Morgue in Tech Support on the DramaSO Discord and they'll look into it."
             COLOR="15158332"
           fi
 
@@ -73,7 +130,7 @@ jobs:
           echo "status=$STATUS"            >> $GITHUB_OUTPUT
           echo "previous=$PREVIOUS_STATUS" >> $GITHUB_OUTPUT
           echo "message=$MESSAGE"          >> $GITHUB_OUTPUT
-          echo "color=$COLOR"              >> $GITHUB_OUTPUT
+          echo "color=$COLOR"             >> $GITHUB_OUTPUT
 
       - name: Send Discord notification only on change
         if: steps.check.outputs.status != steps.check.outputs.previous

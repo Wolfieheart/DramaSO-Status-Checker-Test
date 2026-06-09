@@ -39,23 +39,41 @@ jobs:
           STATUS="down"
           MESSAGE=""
           COLOR="15158332"
-          HTTP_STATUS=$(curl -o /dev/null -s -w "%{http_code}" --max-time 10 "$URL" || echo "000")
-          if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 400 ]; then
+
+          # Capture both status code and body
+          RESPONSE=$(curl -s -o /tmp/response_body.txt -w "%{http_code}" --max-time 10 "$URL" || echo "000")
+          HTTP_STATUS="$RESPONSE"
+          BODY=$(cat /tmp/response_body.txt)
+
+          # Cloudflare serves its own HTML error pages (521/522/523/524) but
+          # can also return 200 via Always Online — detect both cases
+          CF_ERROR=false
+          if echo "$BODY" | grep -qiE "(error 521|error 522|error 523|error 524|cloudflare.*origin|web server is down|connection timed out|origin is unreachable)"; then
+            CF_ERROR=true
+          fi
+
+          if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 400 ] && [ "$CF_ERROR" = "false" ]; then
             STATUS="up"
             MESSAGE="✅ DramaSO is UP — responded with HTTP $HTTP_STATUS."
             COLOR="3066993"
           else
-            STATUS="down"
-            MESSAGE="🚨 DramaSO is DOWN (HTTP $HTTP_STATUS). Hang tight! In the meantime, ping Morgue in Tech Support on the DramaSO Discord and they'll look into it."
+            if [ "$CF_ERROR" = "true" ]; then
+              STATUS="down"
+              MESSAGE="🚨 DramaSO is DOWN (Cloudflare error page detected, HTTP $HTTP_STATUS). Hang tight! In the meantime, ping Morgue in Tech Support on the DramaSO Discord and they'll look into it."
+            else
+              STATUS="down"
+              MESSAGE="🚨 DramaSO is DOWN (HTTP $HTTP_STATUS). Hang tight! In the meantime, ping Morgue in Tech Support on the DramaSO Discord and they'll look into it."
+            fi
             COLOR="15158332"
           fi
+
           PREVIOUS_STATUS=$(cat .status)
           echo "Current: $STATUS"
           echo "Previous: $PREVIOUS_STATUS"
-          echo "status=$STATUS" >> $GITHUB_OUTPUT
+          echo "status=$STATUS"            >> $GITHUB_OUTPUT
           echo "previous=$PREVIOUS_STATUS" >> $GITHUB_OUTPUT
-          echo "message=$MESSAGE" >> $GITHUB_OUTPUT
-          echo "color=$COLOR" >> $GITHUB_OUTPUT
+          echo "message=$MESSAGE"          >> $GITHUB_OUTPUT
+          echo "color=$COLOR"              >> $GITHUB_OUTPUT
 
       - name: Send Discord notification only on change
         if: steps.check.outputs.status != steps.check.outputs.previous

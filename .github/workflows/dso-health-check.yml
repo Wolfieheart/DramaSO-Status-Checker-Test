@@ -13,7 +13,6 @@ jobs:
 check-uptime:
 runs-on: self-hosted
 
-```
 permissions:
   contents: write
 
@@ -201,4 +200,3 @@ steps:
       if [[ "$HTTP" != "204" ]]; then
         echo "::warning::Discord webhook returned HTTP $HTTP"
       fi
-```

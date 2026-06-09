@@ -31,7 +31,7 @@ jobs:
             -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36" \
             "https://backup.dramaso.org/userapi/avatars/online" 2>&1 | tail -30
             
-      - name: Check DramaSO server status
+      * name: Check DramaSO server status
         id: check
         run: |
           STATUS="DOWN"
@@ -39,55 +39,68 @@ jobs:
           DETAIL="No endpoints could be reached"
 
           check_url() {
-            local url="$1"
-            local label="$2"
+          local url="$1"
+          local label="$2"
 
-            HTTP_CODE=$(curl -s -o /tmp/response_body.txt -w "%{http_code}" \
-              --max-time 15 \
-              --connect-timeout 10 \
-              -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36" \
-              "$url" 2>/tmp/curl_err.txt)
-            CURL_EXIT=$?
+          ```
+          HTTP_CODE=$(curl -s -o /tmp/response_body.txt -w "%{http_code}" \
+            --max-time 15 \
+            --connect-timeout 10 \
+            -D /tmp/response_headers.txt \
+            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36" \
+            "$url" 2>/tmp/curl_err.txt)
 
-            echo "[$label] curl exit=$CURL_EXIT, HTTP=$HTTP_CODE"
+          CURL_EXIT=$?
 
-            if [ $CURL_EXIT -ne 0 ]; then
-              echo "[$label] Connection failed (curl exit $CURL_EXIT)"
-              return 1
-            fi
+          echo "[$label] curl exit=$CURL_EXIT, HTTP=$HTTP_CODE"
 
-            # Cloudflare error pages (520-527, 530)
-            if [[ "$HTTP_CODE" =~ ^(520|521|522|523|524|525|526|527|530)$ ]]; then
-              echo "[$label] Cloudflare error detected (HTTP $HTTP_CODE)"
-              DETAIL="Cloudflare error $HTTP_CODE on $label"
-              return 1
-            fi
-
-            # 2xx and 3xx = UP
-            if [[ "$HTTP_CODE" =~ ^[23] ]]; then
-              echo "[$label] Reachable (HTTP $HTTP_CODE)"
-              return 0
-            fi
-
-            echo "[$label] Server returned HTTP $HTTP_CODE — treating as DOWN"
-            DETAIL="HTTP $HTTP_CODE from $label"
+          if [ $CURL_EXIT -ne 0 ]; then
+            DETAIL="curl exit $CURL_EXIT on $label"
             return 1
-          }
-
-          # --- Primary: city API endpoint ---
-          if check_url "https://backup.dramaso.org/userapi/city/1/city.json" "city-api"; then
-            STATUS="UP"
-            SOURCE="city-api (backup.dramaso.org)"
-          # --- Fallback: online avatars endpoint ---
-          elif check_url "https://backup.dramaso.org/userapi/avatars/online" "avatars-api"; then
-            STATUS="UP"
-            SOURCE="avatars-api (backup.dramaso.org)"
           fi
 
-          echo "status=$STATUS"       >> "$GITHUB_OUTPUT"
-          echo "source=$SOURCE"       >> "$GITHUB_OUTPUT"
-          echo "detail=$DETAIL"       >> "$GITHUB_OUTPUT"
+          # Cloudflare challenge page detected
+          if grep -qi "^cf-mitigated:" /tmp/response_headers.txt; then
+            echo "[$label] Cloudflare challenge detected - treating as UP"
+            return 0
+          fi
+
+          # Cloudflare gateway/origin failures
+          if [[ "$HTTP_CODE" =~ ^(520|521|522|523|524|525|526|527|530)$ ]]; then
+            DETAIL="Cloudflare error $HTTP_CODE on $label"
+            return 1
+          fi
+
+          # Normal success responses
+          if [[ "$HTTP_CODE" =~ ^[23] ]]; then
+            echo "[$label] Reachable (HTTP $HTTP_CODE)"
+            return 0
+          fi
+
+          DETAIL="HTTP $HTTP_CODE from $label"
+          return 1
+          ```
+
+          }
+
+          # Primary endpoint
+
+          if check_url "https://backup.dramaso.org/userapi/city/1/city.json" "city-api"; then
+          STATUS="UP"
+          SOURCE="city-api (backup.dramaso.org)"
+
+          # Fallback endpoint
+
+          elif check_url "https://backup.dramaso.org/userapi/avatars/online" "avatars-api"; then
+          STATUS="UP"
+          SOURCE="avatars-api (backup.dramaso.org)"
+          fi
+
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          echo "source=$SOURCE" >> "$GITHUB_OUTPUT"
+          echo "detail=$DETAIL" >> "$GITHUB_OUTPUT"
           echo "timestamp=$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
+
 
       - name: Read previous status
         id: prev

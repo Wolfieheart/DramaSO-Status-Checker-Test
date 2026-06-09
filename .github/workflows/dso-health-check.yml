@@ -39,15 +39,14 @@ jobs:
           MAIN_URL="https://dramaso.org"
           API_URL="https://api.dramaso.org"
           STATUS="down"
-          MESSAGE=""
           COLOR="15158332"
 
-          # Cache-bust timestamp so Cloudflare can't serve a stale cached page
+          # Cache-bust for API only
           CACHE_BUST=$(date +%s)
 
           # ── Main site check ──────────────────────────────────────────────
-          # -L follows redirects so we get the final destination status code,
-          # not a 301 that looks healthy but leads somewhere dead
+          # No cache-bust query param — some sites 404 on unknown query strings
+          # Cache-Control headers are sufficient to bypass Cloudflare caching
           MAIN_HTTP=$(curl -s \
             -L --max-redirs 5 \
             -o /tmp/main_body.txt \
@@ -56,7 +55,7 @@ jobs:
             --max-time 10 \
             -H "Cache-Control: no-cache, no-store, must-revalidate" \
             -H "Pragma: no-cache" \
-            "${MAIN_URL}/?nocache=${CACHE_BUST}" \
+            "$MAIN_URL" \
             || echo "000")
 
           MAIN_BODY=$(cat /tmp/main_body.txt)
@@ -66,14 +65,12 @@ jobs:
           echo "Main HTTP: $MAIN_HTTP"
           echo "Main CF-Cache-Status: $MAIN_CF_CACHE"
 
-          # CF serving cached content = origin was not reached = treat as suspect
           MAIN_CF_CACHED=false
           if echo "$MAIN_CF_CACHE" | grep -qiE "^(hit|stale|expired|revalidated)$"; then
             MAIN_CF_CACHED=true
             echo "WARNING: Cloudflare served a cached response for main site"
           fi
 
-          # Cloudflare error body patterns (521/522/523/524 etc.)
           MAIN_CF_ERROR=false
           if echo "$MAIN_BODY" | grep -qiE \
             "(error 52[1-4]|cloudflare.*origin|web server is down|connection timed out|origin is unreachable|this page has been cached by cloudflare)"; then
@@ -87,7 +84,8 @@ jobs:
             MAIN_OK=true
           fi
 
-          # ── API check (not cached, more reliable) ────────────────────────
+          # ── API check ────────────────────────────────────────────────────
+          # 4xx from API still means origin is alive and responding
           API_HTTP=$(curl -s \
             -L --max-redirs 5 \
             -o /tmp/api_body.txt \
@@ -103,11 +101,10 @@ jobs:
 
           API_OK=false
           if [ "$API_HTTP" -ge 200 ] && [ "$API_HTTP" -lt 500 ]; then
-            # Even a 404/403 from the API means the origin is alive
             API_OK=true
           fi
 
-          # ── Combine: both must look healthy ──────────────────────────────
+          # ── Verdict ──────────────────────────────────────────────────────
           if [ "$MAIN_OK" = "true" ] && [ "$API_OK" = "true" ]; then
             STATUS="up"
             MESSAGE="✅ DramaSO is UP — site HTTP $MAIN_HTTP, API HTTP $API_HTTP."

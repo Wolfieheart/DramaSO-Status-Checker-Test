@@ -18,7 +18,19 @@ jobs:
     steps:
       - name: Checkout main
         uses: actions/checkout@v4
-
+  
+      - name: Debug endpoint responses
+        run: |
+          echo "=== city-api ==="
+          curl -v --max-time 15 \
+            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36" \
+            "https://backup.dramaso.org/userapi/city/1/city.json" 2>&1 | tail -30
+      
+          echo "=== avatars-api ==="
+          curl -v --max-time 15 \
+            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36" \
+            "https://backup.dramaso.org/userapi/avatars/online" 2>&1 | tail -30
+            
       - name: Check DramaSO server status
         id: check
         run: |
@@ -94,6 +106,8 @@ jobs:
           git add .status
           git diff --cached --quiet || git commit -m "chore: status ${{ steps.check.outputs.status }} @ ${{ steps.check.outputs.timestamp }}"
           git push origin main
+
+          
 
       - name: Send Discord notification
         env:

@@ -16,8 +16,11 @@ jobs:
       contents: write
 
     steps:
-      - name: Checkout repository
+      - name: Checkout status branch
         uses: actions/checkout@v4
+        with:
+          ref: status
+          path: status-branch
 
       - name: Check DramaSO server status
         id: check
@@ -39,20 +42,19 @@ jobs:
 
             echo "[$label] curl exit=$CURL_EXIT, HTTP=$HTTP_CODE"
 
-            # Network/connection failure
             if [ $CURL_EXIT -ne 0 ]; then
               echo "[$label] Connection failed (curl exit $CURL_EXIT)"
               return 1
             fi
 
-            # Cloudflare error pages (520–527, 530) and generic 5xx from CF
+            # Cloudflare error pages (520-527, 530)
             if [[ "$HTTP_CODE" =~ ^(520|521|522|523|524|525|526|527|530)$ ]]; then
               echo "[$label] Cloudflare error detected (HTTP $HTTP_CODE)"
               DETAIL="Cloudflare error $HTTP_CODE on $label"
               return 1
             fi
 
-            # Treat 2xx and 3xx as UP; anything else (4xx, 5xx) as DOWN
+            # 2xx and 3xx = UP
             if [[ "$HTTP_CODE" =~ ^[23] ]]; then
               echo "[$label] Reachable (HTTP $HTTP_CODE)"
               return 0
@@ -82,19 +84,20 @@ jobs:
         id: prev
         run: |
           PREV="UNKNOWN"
-          if [ -f .status ]; then
-            PREV=$(cat .status)
+          if [ -f status-branch/.status ]; then
+            PREV=$(cat status-branch/.status)
           fi
           echo "status=$PREV" >> "$GITHUB_OUTPUT"
 
-      - name: Commit status file
+      - name: Commit status to status branch
         run: |
+          cd status-branch
           echo "${{ steps.check.outputs.status }}" > .status
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add .status
           git diff --cached --quiet || git commit -m "chore: status ${{ steps.check.outputs.status }} @ ${{ steps.check.outputs.timestamp }}"
-          git push
+          git push origin status
 
       - name: Send Discord notification
         env:
@@ -106,7 +109,6 @@ jobs:
           DETAIL="${{ steps.check.outputs.detail }}"
           TIMESTAMP="${{ steps.check.outputs.timestamp }}"
 
-          # Decide whether this is a state change
           if [ "$CURRENT" = "$PREV" ]; then
             CHANGE_LINE="No change — still **${CURRENT}**"
           else
@@ -114,13 +116,13 @@ jobs:
           fi
 
           if [ "$CURRENT" = "UP" ]; then
-            COLOR=3066993       # green
+            COLOR=3066993
             EMOJI="🟢"
             TITLE="${EMOJI} DramaSO is UP"
             FIELD_NAME="Reached via"
             FIELD_VALUE="$SOURCE"
           else
-            COLOR=15158332      # red
+            COLOR=15158332
             EMOJI="🔴"
             TITLE="${EMOJI} DramaSO is DOWN"
             FIELD_NAME="Reason"

@@ -31,7 +31,7 @@ jobs:
             -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36" \
             "https://backup.dramaso.org/userapi/avatars/online" 2>&1 | tail -30
             
-      * name: Check DramaSO server status
+      - name: Check DramaSO server status
         id: check
         run: |
           STATUS="DOWN"

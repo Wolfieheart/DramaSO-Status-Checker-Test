@@ -46,8 +46,10 @@ jobs:
           CACHE_BUST=$(date +%s)
 
           # ── Main site check ──────────────────────────────────────────────
-          # Dump response headers to file so we can inspect CF-Cache-Status
+          # -L follows redirects so we get the final destination status code,
+          # not a 301 that looks healthy but leads somewhere dead
           MAIN_HTTP=$(curl -s \
+            -L --max-redirs 5 \
             -o /tmp/main_body.txt \
             -D /tmp/main_headers.txt \
             -w "%{http_code}" \
@@ -87,6 +89,7 @@ jobs:
 
           # ── API check (not cached, more reliable) ────────────────────────
           API_HTTP=$(curl -s \
+            -L --max-redirs 5 \
             -o /tmp/api_body.txt \
             -D /tmp/api_headers.txt \
             -w "%{http_code}" \
@@ -100,7 +103,7 @@ jobs:
 
           API_OK=false
           if [ "$API_HTTP" -ge 200 ] && [ "$API_HTTP" -lt 500 ]; then
-            # Even a 404 from the API means the origin is alive
+            # Even a 404/403 from the API means the origin is alive
             API_OK=true
           fi
 
@@ -130,7 +133,7 @@ jobs:
           echo "status=$STATUS"            >> $GITHUB_OUTPUT
           echo "previous=$PREVIOUS_STATUS" >> $GITHUB_OUTPUT
           echo "message=$MESSAGE"          >> $GITHUB_OUTPUT
-          echo "color=$COLOR"             >> $GITHUB_OUTPUT
+          echo "color=$COLOR"              >> $GITHUB_OUTPUT
 
       - name: Send Discord notification only on change
         if: steps.check.outputs.status != steps.check.outputs.previous

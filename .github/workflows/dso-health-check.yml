@@ -33,7 +33,7 @@ jobs:
             HTTP_CODE=$(curl -s -o /tmp/response_body.txt -w "%{http_code}" \
               --max-time 15 \
               --connect-timeout 10 \
-              -H "User-Agent: DramaSO-UptimeBot/1.0" \
+              -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36" \
               "$url" 2>/tmp/curl_err.txt)
             CURL_EXIT=$?
 
@@ -66,10 +66,10 @@ jobs:
           if check_url "https://backup.dramaso.org/userapi/city/1/city.json" "city-api"; then
             STATUS="UP"
             SOURCE="city-api (backup.dramaso.org)"
-          # --- Fallback: up.php probe ---
-          elif check_url "https://www.dramaso.org/up.php" "up-php"; then
+          # --- Fallback: online avatars endpoint ---
+          elif check_url "https://backup.dramaso.org/userapi/avatars/online" "avatars-api"; then
             STATUS="UP"
-            SOURCE="up-php (www.dramaso.org)"
+            SOURCE="avatars-api (backup.dramaso.org)"
           fi
 
           echo "status=$STATUS"       >> "$GITHUB_OUTPUT"

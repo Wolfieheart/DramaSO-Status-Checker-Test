@@ -15,101 +15,156 @@ jobs:
     steps:
     - name: Checkout main
       uses: actions/checkout@v4
-
+  
     - name: Install jq
       run: |
         if ! command -v jq >/dev/null 2>&1; then
           sudo apt-get update
           sudo apt-get install -y jq
         fi
-
+  
+    - name: Debug endpoint responses
+      run: |
+        echo "=== city-api ==="
+        curl -I \
+          --max-time 15 \
+          -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36" \
+          "https://backup.dramaso.org/userapi/city/1/city.json" || true
+  
+        echo ""
+        echo "=== avatars-api ==="
+        curl -I \
+          --max-time 15 \
+          -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36" \
+          "https://backup.dramaso.org/userapi/avatars/online" || true
+  
     - name: Check DramaSO server status
       id: check
       run: |
         STATUS="DOWN"
-        DETAIL="Could not reach up.php"
-
-        CURL_EXIT=0
-        BODY=$(curl -s \
-          --max-time 15 \
-          --connect-timeout 10 \
-          -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36" \
-          "https://www.dramaso.org/up.php" 2>/tmp/curl_err.txt) || CURL_EXIT=$?
-
-        echo "curl exit: $CURL_EXIT"
-        echo "Response body: $BODY"
-
-        if [ "$CURL_EXIT" -ne 0 ]; then
-          DETAIL="curl failed (exit $CURL_EXIT) — $(cat /tmp/curl_err.txt)"
-
-        elif echo "$BODY" | grep -qi "City is DOWN"; then
-          DETAIL="up.php reports: City is DOWN"
-
-        elif echo "$BODY" | grep -qiE "(hour|minute|day|second|ago)"; then
+        SOURCE="none"
+        DETAIL="No endpoints could be reached"
+  
+        check_url() {
+          local url="$1"
+          local label="$2"
+  
+          HTTP_CODE=$(curl -s \
+            -o /tmp/response_body.txt \
+            -w "%{http_code}" \
+            --max-time 15 \
+            --connect-timeout 10 \
+            -D /tmp/response_headers.txt \
+            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36" \
+            "$url" 2>/tmp/curl_err.txt)
+  
+          CURL_EXIT=$?
+  
+          echo "[$label] curl exit=$CURL_EXIT HTTP=$HTTP_CODE"
+  
+          if [ "$CURL_EXIT" -ne 0 ]; then
+            echo "[$label] Connection failed"
+            DETAIL="curl exit $CURL_EXIT on $label"
+            return 1
+          fi
+  
+          if grep -qi "^cf-mitigated:" /tmp/response_headers.txt; then
+            echo "[$label] Cloudflare challenge detected - treating as UP"
+            return 0
+          fi
+  
+          if [[ "$HTTP_CODE" =~ ^(520|521|522|523|524|525|526|527|530)$ ]]; then
+            echo "[$label] Cloudflare error $HTTP_CODE"
+            DETAIL="Cloudflare error $HTTP_CODE on $label"
+            return 1
+          fi
+  
+          if [[ "$HTTP_CODE" =~ ^[23] ]]; then
+            echo "[$label] Reachable"
+            return 0
+          fi
+  
+          echo "[$label] HTTP $HTTP_CODE"
+          DETAIL="HTTP $HTTP_CODE from $label"
+          return 1
+        }
+  
+        if check_url \
+          "https://backup.dramaso.org/userapi/city/1/city.json" \
+          "city-api"; then
           STATUS="UP"
-          DETAIL="up.php reports uptime: $BODY"
-
-        else
-          DETAIL="up.php returned unexpected response: $BODY"
+          SOURCE="city-api (backup.dramaso.org)"
+  
+        elif check_url \
+          "https://backup.dramaso.org/userapi/avatars/online" \
+          "avatars-api"; then
+          STATUS="UP"
+          SOURCE="avatars-api (backup.dramaso.org)"
         fi
-
-        echo "status=$STATUS"    >> "$GITHUB_OUTPUT"
-        echo "detail=$DETAIL"    >> "$GITHUB_OUTPUT"
+  
+        echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+        echo "source=$SOURCE" >> "$GITHUB_OUTPUT"
+        echo "detail=$DETAIL" >> "$GITHUB_OUTPUT"
         echo "timestamp=$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
-
+  
     - name: Read previous status
       id: prev
       run: |
         PREV="UNKNOWN"
+  
         if [ -f .status ]; then
           PREV=$(cat .status)
         fi
+  
         echo "status=$PREV" >> "$GITHUB_OUTPUT"
-
+  
     - name: Commit status to main
       run: |
         echo "${{ steps.check.outputs.status }}" > .status
-
+  
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
-
+  
         git add .status
-
+  
         git diff --cached --quiet || \
           git commit -m "chore: status ${{ steps.check.outputs.status }} @ ${{ steps.check.outputs.timestamp }}"
-
+  
         git push origin main
-
+  
     - name: Send Discord notification
       env:
         DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
       run: |
         CURRENT="${{ steps.check.outputs.status }}"
         PREV="${{ steps.prev.outputs.status }}"
+        SOURCE="${{ steps.check.outputs.source }}"
         DETAIL="${{ steps.check.outputs.detail }}"
         TIMESTAMP="${{ steps.check.outputs.timestamp }}"
-
+  
         if [ "$CURRENT" = "$PREV" ]; then
           CHANGE_LINE="No change — still **${CURRENT}**"
         else
           CHANGE_LINE="⚠️ Status changed from **${PREV}** → **${CURRENT}**"
         fi
-
+  
         if [ "$CURRENT" = "UP" ]; then
           COLOR=3066993
           TITLE="🟢 DramaSO is UP"
-          FIELD_NAME="Uptime info"
+          FIELD_NAME="Reached via"
+          FIELD_VALUE="$SOURCE"
         else
           COLOR=15158332
           TITLE="🔴 DramaSO is DOWN"
           FIELD_NAME="Reason"
+          FIELD_VALUE="$DETAIL"
         fi
-
+  
         PAYLOAD=$(jq -n \
           --arg title "$TITLE" \
           --arg change "$CHANGE_LINE" \
           --arg fname "$FIELD_NAME" \
-          --arg fvalue "$DETAIL" \
+          --arg fvalue "$FIELD_VALUE" \
           --arg ts "$TIMESTAMP" \
           --argjson col "$COLOR" \
           '{
@@ -119,15 +174,15 @@ jobs:
               title: $title,
               color: $col,
               fields: [
-                { name: "Status",  value: $change, inline: false },
-                { name: $fname,    value: $fvalue, inline: false }
+                { name: "Status", value: $change, inline: false },
+                { name: $fname, value: $fvalue, inline: false }
               ],
               footer: {
                 text: ("Checked at " + $ts)
               }
             }]
           }')
-
+  
         HTTP=$(curl -s \
           -o /dev/null \
           -w "%{http_code}" \
@@ -135,9 +190,9 @@ jobs:
           -H "Content-Type: application/json" \
           -d "$PAYLOAD" \
           "$DISCORD_WEBHOOK")
-
+  
         echo "Discord webhook response: $HTTP"
-
+  
         if [[ "$HTTP" != "204" ]]; then
           echo "::warning::Discord webhook returned HTTP $HTTP"
         fi
